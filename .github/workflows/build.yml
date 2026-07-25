@@ -94,14 +94,17 @@ jobs:
               TARGET=$(echo "$dep" | jq -r '.target_path')
               
               echo "Automatically cloning dependency $REPO into $TARGET..."
+              
+              # PREVENT ERROR 128: Remove the target directory if it already exists from the repo sync
+              if [ -d "$TARGET" ]; then
+                echo "Directory $TARGET already exists. Removing it to prevent clone conflicts..."
+                rm -rf "$TARGET"
+              fi
+              
               # Target TeamWin organization (standard for qcom-common dependencies)
               # Fallback to default branch if android-12.1 does not exist in the dependency repo
- if [ ! -d "$TARGET" ]; then
-    git clone https://github.com/TeamWin/$REPO.git -b android-12.1 $TARGET || \
-    git clone https://github.com/TeamWin/$REPO.git $TARGET
-else
-    echo "$TARGET already exists, skipping..."
-fi
+              git clone https://github.com/TeamWin/$REPO.git -b android-12.1 "$TARGET" || \
+              git clone https://github.com/TeamWin/$REPO.git "$TARGET"
             done
           else
             echo "No twrp.dependencies file found."
