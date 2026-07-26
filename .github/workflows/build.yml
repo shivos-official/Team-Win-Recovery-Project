@@ -32,7 +32,8 @@ jobs:
       - name: Clone kernel
         run: |
           cd "$GITHUB_WORKSPACE/twrp"
-          git clone https://github.com/shivos-official/android_kernel_xiaomi_ginkgo.git -b android-12.1 kernel/xiaomi/ginkgo
+          git clone https://github.com/shivos-official/android_kernel_xiaomi_ginkgo.git -b android-9.0 kernel/xiaomi/ginkgo || \
+git clone https://github.com/shivos-official/android_kernel_xiaomi_ginkgo.git kernel/xiaomi/ginkgo
 
       - name: Build
         run: |
