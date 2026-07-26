@@ -57,7 +57,7 @@ jobs:
           if [ -d "$TARGET" ]; then
             rm -rf "$TARGET"
           fi
-          git clone https://github.com/shivos-official/android_device_xiaomi_ginkgo -b android-12.1 "$TARGET"
+          git clone https://github.com/shivos-official/android_device_xiaomi_ginkgo -b android-9.0 "$TARGET"
           
           TARGET="kernel/xiaomi/ginkgo"
           if [ -d "$TARGET" ]; then
