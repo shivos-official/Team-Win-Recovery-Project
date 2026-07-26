@@ -1,161 +1,48 @@
-name: Build TWRP for Xiaomi Redmi Note 8 (ginkgo)
+name: Build TWRP (template)
 
-# Requirement 14: Support workflow_dispatch
 on:
   workflow_dispatch:
 
-# Requirement 1: Use Ubuntu 22.04
 jobs:
   build:
-    name: Build TWRP
     runs-on: ubuntu-22.04
-    permissions:
-      contents: read
 
     steps:
-      # Step 1: Checkout the repository to access local files if any
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # Step 2: Requirement 2 - Free disk space
-      # Using jlumbroso's popular action to clear unused pre-installed tools and gain ~40GB of space
-      - name: Maximize Build Space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
-      # Step 3: Requirement 3 - Install every required package for building TWRP/AOSP
-      - name: Install Build Dependencies
-        run: |
-          echo "Updating apt repositories..."
-          sudo apt-get update
-          echo "Installing packages..."
-          sudo apt-get install -y git-core gnupg flex bison build-essential zip curl zlib1g-dev \
-            libc6-dev-i386 x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils \
-            xsltproc unzip fontconfig libncurses5-dev rsync python3 python-is-python3 bc ccache jq
-          echo "Cleaning up apt cache to save space..."
-          sudo apt-get clean
-
-      # Step 4: Configure Git identity (required by repo)
-      - name: Configure Git Identity
-        run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git config --global color.ui true
-
-      # Step 5: Requirement 4 - Install repo tool
-      - name: Install Repo Tool
+      - name: Install repo tool
         run: |
           mkdir -p ~/bin
           curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-          chmod a+x ~/bin/repo
-          # Add to GitHub Actions path
-          echo "~/bin" >> $GITHUB_PATH
+          chmod +x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
 
-      # Step 6: Requirement 5 & 16 - Initialize correct TWRP manifest for Android 12.1
-      - name: Initialize TWRP Manifest
+      - name: Create workspace
         run: |
-          # Using the standard TWRP minimal manifest for AOSP 12.1
+          mkdir -p "$GITHUB_WORKSPACE/twrp"
+          cd "$GITHUB_WORKSPACE/twrp"
           repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --depth=1
+          repo sync -c --force-sync --no-clone-bundle --no-tags -j$(nproc)
 
-      # Step 7: Requirement 6 - Sync the repository tree
-      - name: Repo Sync
+      - name: Clone device tree
         run: |
-          # Sync with optimized flags to save time and bandwidth
-          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
-
-      # Step 8: Replace default TWRP source with the user's specific TeamWin fork
-      - name: Override TWRP Source with Custom Repository
-        run: |
-          echo "Removing default bootable/recovery..."
-          rm -rf bootable/recovery
-          echo "Cloning custom TeamWin-Recovery-Project..."
-          # Clone the requested fork. Fallback to default branch if android-12.1 isn't present in this specific fork.
-          git clone https://github.com/shivos-official/Team-Win-Recovery-Project.git -b android-12.1 bootable/recovery || \
-          git clone https://github.com/shivos-official/Team-Win-Recovery-Project.git bootable/recovery
-
-      # Step 9: Requirement 7, 8, 20 - Clone Device Tree, dependencies, and kernel
-      - name: Clone Device Tree, Kernel, and Dependencies
-        run: |
-          echo "Cloning device tree for ginkgo..."
+          cd "$GITHUB_WORKSPACE/twrp"
           git clone https://github.com/shivos-official/android_device_xiaomi_ginkgo.git -b android-12.1 device/xiaomi/ginkgo
-          
-          echo "Checking for twrp.dependencies and parsing automatically..."
-          if [ -f device/xiaomi/ginkgo/twrp.dependencies ]; then
-            jq -c '.[]' device/xiaomi/ginkgo/twrp.dependencies | while read -r dep; do
-              # Extract repository name and target path using jq
-              REPO=$(echo "$dep" | jq -r '.repository')
-              TARGET=$(echo "$dep" | jq -r '.target_path')
-              
-              echo "Automatically cloning dependency $REPO into $TARGET..."
-              
-              # PREVENT ERROR 128: Remove the target directory if it already exists from the repo sync
-              if [ -d "$TARGET" ]; then
-                echo "Directory $TARGET already exists. Removing it to prevent clone conflicts..."
-                rm -rf "$TARGET"
-              fi
-              
-              # Target TeamWin organization (standard for qcom-common dependencies)
-              # Fallback to default branch if android-12.1 does not exist in the dependency repo
-              git clone https://github.com/TeamWin/$REPO.git -b android-12.1 "$TARGET" || \
-              git clone https://github.com/TeamWin/$REPO.git "$TARGET"
-            done
-          else
-            echo "No twrp.dependencies file found."
-          fi
-          
-          echo "Cloning kernel tree..."
-          # Fallback to default branch in case android-12.1 branch isn't available for the kernel repo
-          git clone https://github.com/shivos-official/android_kernel_xiaomi_ginkgo.git -b android-12.1 kernel/xiaomi/ginkgo || \
-          git clone https://github.com/shivos-official/android_kernel_xiaomi_ginkgo.git kernel/xiaomi/ginkgo
 
-      # Step 10: Requirement 12 - Setup ccache to speed up future builds
-      - name: Setup Ccache
-        uses: actions/cache@v4
-        with:
-          path: .ccache
-          # Cache key depends on the current commit SHA to rotate caches, restoring from the most recent build
-          key: ccache-twrp-ginkgo-${{ github.sha }}
-          restore-keys: |
-            ccache-twrp-ginkgo-
-
-      # Step 11: Requirement 9, 11, 13 - Build recovery using the correct lunch target, log output, and fail on errors
-      - name: Build TWRP Recovery
+      - name: Clone kernel
         run: |
-          # Fail immediately on any error
-          set -e
-          
-          # Setup build environment variables
+          cd "$GITHUB_WORKSPACE/twrp"
+          git clone https://github.com/shivos-official/android_kernel_xiaomi_ginkgo.git -b android-12.1 kernel/xiaomi/ginkgo
+
+      - name: Build
+        run: |
+          cd "$GITHUB_WORKSPACE/twrp"
           export ALLOW_MISSING_DEPENDENCIES=true
-          export LC_ALL=C
-          export USE_CCACHE=1
-          export CCACHE_DIR=$GITHUB_WORKSPACE/.ccache
-          export CCACHE_EXEC=$(which ccache)
-          
-          # Initialize ccache limit
-          ccache -M 50G
-          
-          echo "Setting up build environment..."
           source build/envsetup.sh
-          
-          echo "Lunching target twrp_ginkgo-eng..."
           lunch twrp_ginkgo-eng
-          
-          echo "Starting recovery image build..."
-          # Using mka for optimized parallel building
           mka recoveryimage
 
-      # Step 12: Requirement 10 - Upload recovery.img as a GitHub Actions Artifact
-      - name: Upload Recovery Artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: TWRP-12.1-Recovery-ginkgo
-          # Path to the compiled recovery image based on BoardConfig variables
-          path: out/target/product/ginkgo/recovery.img
-          if-no-files-found: error
+          name: recovery
+          path: ${{ github.workspace }}/twrp/out/target/product/ginkgo/recovery.img
