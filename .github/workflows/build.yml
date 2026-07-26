@@ -1,4 +1,4 @@
-name: Build TWRP (template)
+name: Build TWRP Recovery for ginkgo
 
 on:
   workflow_dispatch:
@@ -6,44 +6,127 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-
+    
     steps:
-      - uses: actions/checkout@v4
+      - name: Maximize Build Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          sudo apt-get clean
 
-      - name: Install repo tool
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-core gnupg flex bison build-essential zip curl zlib1g-dev libc6-dev-i386 x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 python3-pip jq ccache rsync bc libncurses5-dev libssl-dev
+
+      - name: Install Repo Tool
         run: |
           mkdir -p ~/bin
           curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-          chmod +x ~/bin/repo
-          echo "$HOME/bin" >> $GITHUB_PATH
+          chmod a+x ~/bin/repo
+          sudo ln -sf ~/bin/repo /usr/bin/repo
 
-      - name: Create workspace
+      - name: Create Workspace
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/twrp"
-          cd "$GITHUB_WORKSPACE/twrp"
-          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --depth=1
-          repo sync -c --force-sync --no-clone-bundle --no-tags -j$(nproc)
+          mkdir -p ${{ github.workspace }}/workspace
 
-      - name: Clone device tree
+      - name: Initialize and Sync ROM Manifest
+        working-directory: ${{ github.workspace }}/workspace
         run: |
-          cd "$GITHUB_WORKSPACE/twrp"
-          git clone https://github.com/shivos-official/android_device_xiaomi_ginkgo.git -b android-12.1 device/xiaomi/ginkgo
+          set -e
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp -b twrp-12.1 --depth=1
+          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 
-      - name: Clone kernel
+      - name: Clone Recovery, Device Tree, and Kernel
+        working-directory: ${{ github.workspace }}/workspace
         run: |
-          cd "$GITHUB_WORKSPACE/twrp"
-          git clone https://github.com/shivos-official/android_kernel_xiaomi_ginkgo.git -b android-9.0 kernel/xiaomi/ginkgo || \
-git clone https://github.com/shivos-official/android_kernel_xiaomi_ginkgo.git kernel/xiaomi/ginkgo
+          set -e
+          
+          TARGET="bootable/recovery"
+          if [ -d "$TARGET" ]; then
+            rm -rf "$TARGET"
+          fi
+          git clone https://github.com/shivos-official/Team-Win-Recovery-Project -b android-9.0 "$TARGET"
+          
+          TARGET="device/xiaomi/ginkgo"
+          if [ -d "$TARGET" ]; then
+            rm -rf "$TARGET"
+          fi
+          git clone https://github.com/shivos-official/android_device_xiaomi_ginkgo -b android-12.1 "$TARGET"
+          
+          TARGET="kernel/xiaomi/ginkgo"
+          if [ -d "$TARGET" ]; then
+            rm -rf "$TARGET"
+          fi
+          git clone https://github.com/shivos-official/android_kernel_xiaomi_ginkgo -b android-9.0 "$TARGET"
 
-      - name: Build
+      - name: Parse and Clone twrp.dependencies
+        working-directory: ${{ github.workspace }}/workspace
         run: |
-          cd "$GITHUB_WORKSPACE/twrp"
+          set -e
+          python3 -c '
+          import json
+          import os
+          import sys
+          
+          deps_file = "device/xiaomi/ginkgo/twrp.dependencies"
+          if os.path.exists(deps_file):
+              try:
+                  with open(deps_file, "r") as f:
+                      deps = json.load(f)
+                  
+                  for dep in deps:
+                      target = dep.get("target_path")
+                      repository = dep.get("repository")
+                      branch = dep.get("branch", "twrp-12.1")
+                      remote = dep.get("remote", "TeamWin")
+                      
+                      if remote == "github" or remote == "TeamWin":
+                          url = f"https://github.com/{repository}"
+                      else:
+                          url = f"https://github.com/{remote}/{repository}"
+                          
+                      print(f"Cloning {url} to {target} on branch {branch}")
+                      
+                      if os.path.exists(target):
+                          os.system(f"rm -rf {target}")
+                          
+                      cmd = f"git clone {url} -b {branch} {target}"
+                      if os.system(cmd) != 0:
+                          print(f"Failed to clone {url}")
+                          sys.exit(1)
+              except Exception as e:
+                  print(f"Error parsing twrp.dependencies: {e}")
+                  sys.exit(1)
+          else:
+              print("No twrp.dependencies found, skipping.")
+          '
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          max-size: "10G"
+
+      - name: Build TWRP Recovery Image
+        working-directory: ${{ github.workspace }}/workspace
+        run: |
+          set -e
+          export USE_CCACHE=1
+          export CCACHE_EXEC=/usr/bin/ccache
           export ALLOW_MISSING_DEPENDENCIES=true
+          
           source build/envsetup.sh
           lunch twrp_ginkgo-eng
           mka recoveryimage
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload Recovery Image Artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: recovery
-          path: ${{ github.workspace }}/twrp/out/target/product/ginkgo/recovery.img
+          name: recovery-ginkgo
+          path: ${{ github.workspace }}/workspace/out/target/product/ginkgo/recovery.img
+          if-no-files-found: error
